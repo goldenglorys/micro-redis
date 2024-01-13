@@ -1,7 +1,8 @@
+import os
+import pickle
+import selectors
 import socket
 import time
-import pickle
-import os
 
 
 class Error:
@@ -14,19 +15,42 @@ class RedisServer:
         self.host = host
         self.port = port
         self.data_storage = {}
+        self.sel = selectors.DefaultSelector()
+
 
     def start(self):
         self.load_data()
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             server_socket.bind((self.host, self.port))
             server_socket.listen()
+            server_socket.setblocking(False)
+            self.sel.register(server_socket, selectors.EVENT_READ, self.accept)
             print(f"Redis server listening on {self.host}: {self.port}")
-            while True:
-                client_socket, client_address = server_socket.accept()
-                print(f"Accepted connection from {client_address}")
-                self.handle_client(client_socket)
+            try:
+                while True:
+                    events = self.sel.select(timeout=None)
+                    for key, mask in events:
+                        callback = key.data
+                        callback(key.fileobj, mask)
+            except KeyboardInterrupt:
+                print("Caught keyboard interrupt, exiting")
 
-    def handle_client(self, client_socket):
+
+    def accept(self, sock, mask):
+        client_socket, client_address = sock.accept()
+        print(f"Accepted connection from {client_address}")
+        client_socket.setblocking(False)
+        self.sel.register(client_socket, selectors.EVENT_READ, self.handle_client)
+
+
+    def handle_client(self, client_socket, mask):
+        command = client_socket.recv(1024)
+        if command:
+            response = self.process_command(command)
+            client_socket.sendall(response.encode())
+        else:
+            self.sel.unregister(client_socket)
+            client_socket.close()
         with client_socket:
             while True:
                 command = client_socket.recv(1024)
@@ -34,6 +58,7 @@ class RedisServer:
                     break
                 response = self.process_command(command)
                 client_socket.sendall(response.encode())
+
 
     def process_command(self, command):
         deserialized = self.deserialize_resp(command)
@@ -117,6 +142,7 @@ class RedisServer:
         else:
             return self.serialize_resp("Invalid command")
 
+
     def serialize_resp(self, data):
         if data is None:
             return "$-1\r\n"
@@ -131,6 +157,7 @@ class RedisServer:
             return f"-{data.message}\r\n"
         else:
             raise TypeError("Unsupported RESP type")
+
 
     def deserialize_resp(self, message):
         if isinstance(message, bytes):
@@ -163,6 +190,7 @@ class RedisServer:
             return int(message[1 : message.index("\r\n")])
         else:
             raise ValueError("Invalid RESP message")
+
 
     def load_data(self):
         if os.path.exists("dump.pkl"):

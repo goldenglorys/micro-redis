@@ -1,5 +1,7 @@
 import socket
 import time
+import pickle
+import os
 
 
 class Error:
@@ -14,6 +16,7 @@ class RedisServer:
         self.data_storage = {}
 
     def start(self):
+        self.load_data()
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             server_socket.bind((self.host, self.port))
             server_socket.listen()
@@ -38,6 +41,45 @@ class RedisServer:
             return self.serialize_resp("PONG")
         elif deserialized[0].lower() == "echo":
             return self.serialize_resp(deserialized[1])
+        elif deserialized[0].lower() == "exists":
+            key = deserialized[1]
+            return self.serialize_resp(1 if key in self.data_storage else 0)
+        elif deserialized[0].lower() == "del":
+            count = 0
+            for key in deserialized[1:]:
+                if key in self.data_storage:
+                    del self.data_storage[key]
+                    count += 1
+            return self.serialize_resp(count)
+        elif deserialized[0].lower() == "incr" or deserialized[0].lower() == "decr":
+            key = deserialized[1]
+            if key not in self.data_storage:
+                return self.serialize_resp("nil")
+            value, expiry = self.data_storage[key]
+            if isinstance(value, int):
+                self.data_storage[key] = (
+                    value + 1 if deserialized[0].lower() == "incr" else value - 1,
+                    expiry,
+                )
+                return self.serialize_resp(self.data_storage[key][0])
+            else:
+                return self.serialize_resp("value is not an integer")
+        elif deserialized[0].lower() == "lpush" or deserialized[0].lower() == "rpush":
+            key = deserialized[1]
+            values = deserialized[2:]
+            if key not in self.data_storage:
+                self.data_storage[key] = (values, None)
+            else:
+                existing_values, expiry = self.data_storage[key]
+                if not isinstance(existing_values, list):
+                    return self.serialize_resp("existing value is not a list")
+                if deserialized[0].lower() == "lpush":
+                    values.extend(existing_values)
+                else:
+                    existing_values.extend(values)
+                    values = existing_values
+                self.data_storage[key] = (values, expiry)
+            return self.serialize_resp(len(self.data_storage[key][0]))
         elif deserialized[0].lower() == "get":
             key = deserialized[1]
             value, expiry = self.data_storage.get(key, ("nil", None))
@@ -67,6 +109,10 @@ class RedisServer:
                 self.data_storage[key] = (value, time.time() + expiry)
             else:
                 self.data_storage[key] = (value, None)
+            return self.serialize_resp("OK")
+        elif deserialized[0].lower() == "save":
+            with open("dump.pkl", "wb") as f:
+                pickle.dump(self.data_storage, f)
             return self.serialize_resp("OK")
         else:
             return self.serialize_resp("Invalid command")
@@ -117,6 +163,11 @@ class RedisServer:
             return int(message[1 : message.index("\r\n")])
         else:
             raise ValueError("Invalid RESP message")
+
+    def load_data(self):
+        if os.path.exists("dump.pkl"):
+            with open("dump.pkl", "rb") as f:
+                self.data_storage = pickle.load(f)
 
 
 redis_server = RedisServer()

@@ -6,19 +6,45 @@ import time
 
 
 class Error:
+    """Class representing an error with a specific message."""
+
     def __init__(self, message):
         self.message = message
 
 
 class RedisServer:
+    """
+    A Simple Redis server implementation following RESP (Redis Serialization Protocol) spec.
+
+    This server supports basic Redis commands such as PING, ECHO, EXISTS, DEL,
+    INCR, DECR, LPUSH, RPUSH, GET, SET, SAVE, and uses the selectors module
+    to handle multiple concurrent clients.
+
+    Attributes:
+    - host (str): The IP address the server listens on (default is "127.0.0.1").
+    - port (int): The port number the server listens on (default is 6379).
+    - data_storage (dict): Dictionary to store key-value pairs representing the Redis data.
+    - sel (selectors.DefaultSelector): A selector object for handling multiple concurrent clients.
+
+    Methods:
+    - start(): Start the Redis server, listening for incoming connections.
+    - accept(sock, mask): Callback for handling new client connections.
+    - handle_client(client_socket, mask): Callback for handling client requests.
+    - process_command(command): Process the Redis command and generate a response.
+    - serialize_resp(data): Serialize the data into RESP (REdis Serialization Protocol) format.
+    - deserialize_resp(message): Deserialize the RESP message into Python data.
+    - load_data(): Load previously saved data from a file ("dump.pkl").
+    """
+
     def __init__(self, host="127.0.0.1", port=6379) -> None:
+        """Initialize the Redis server with the specified host and port."""
         self.host = host
         self.port = port
         self.data_storage = {}
         self.sel = selectors.DefaultSelector()
 
-
     def start(self):
+        """Starts the server and listens for incoming connections."""
         self.load_data()
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             server_socket.bind((self.host, self.port))
@@ -35,15 +61,20 @@ class RedisServer:
             except KeyboardInterrupt:
                 print("Caught keyboard interrupt, exiting")
 
-
     def accept(self, sock, mask):
+        """Accepts a new client connection and registers it with the selector."""
         client_socket, client_address = sock.accept()
         print(f"Accepted connection from {client_address}")
         client_socket.setblocking(False)
         self.sel.register(client_socket, selectors.EVENT_READ, self.handle_client)
 
-
     def handle_client(self, client_socket, mask):
+        """
+        Handles a client requests.
+
+        This method reads a command from the client, processes it, and sends back a response.
+        If the client has disconnected, it unregisters the client socket from the selector and closes the socket.
+        """
         command = client_socket.recv(1024)
         if command:
             response = self.process_command(command)
@@ -59,8 +90,8 @@ class RedisServer:
                 response = self.process_command(command)
                 client_socket.sendall(response.encode())
 
-
     def process_command(self, command):
+        """Process the Redis command and generate a response."""
         deserialized = self.deserialize_resp(command)
         if deserialized[0].lower() == "ping":
             return self.serialize_resp("PONG")
@@ -142,8 +173,8 @@ class RedisServer:
         else:
             return self.serialize_resp("Invalid command")
 
-
     def serialize_resp(self, data):
+        """Serialize the data into RESP format."""
         if data is None:
             return "$-1\r\n"
         elif isinstance(data, str):
@@ -158,8 +189,8 @@ class RedisServer:
         else:
             raise TypeError("Unsupported RESP type")
 
-
     def deserialize_resp(self, message):
+        """Deserialize the RESP message into Python data."""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
         if message.startswith("*"):
@@ -191,8 +222,8 @@ class RedisServer:
         else:
             raise ValueError("Invalid RESP message")
 
-
     def load_data(self):
+        """Load previously saved data from a file ("dump.pkl")."""
         if os.path.exists("dump.pkl"):
             with open("dump.pkl", "rb") as f:
                 self.data_storage = pickle.load(f)

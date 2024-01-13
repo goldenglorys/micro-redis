@@ -1,4 +1,5 @@
 import socket
+import time
 
 
 class Error:
@@ -29,8 +30,6 @@ class RedisServer:
                 if not command:
                     break
                 response = self.process_command(command)
-                print(response)
-                print(response.encode())
                 client_socket.sendall(response.encode())
 
     def process_command(self, command):
@@ -40,11 +39,34 @@ class RedisServer:
         elif deserialized[0].lower() == "echo":
             return self.serialize_resp(deserialized[1])
         elif deserialized[0].lower() == "get":
-            data = self.data_storage.get(deserialized[1], "nil")
-            return self.serialize_resp(data)
+            key = deserialized[1]
+            value, expiry = self.data_storage.get(key, ("nil", None))
+            if expiry is not None:
+                if time.time() > expiry:
+                    del self.data_storage[key]
+                    return self.serialize_resp("nil")
+            return self.serialize_resp(value)
         elif deserialized[0].lower() == "set":
             key, value = deserialized[1], deserialized[2]
-            self.data_storage[key] = value
+            ex, px, exat, pxat = None, None, None, None
+            if len(deserialized) > 3:
+                for i in range(3, len(deserialized), 2):
+                    option = deserialized[i].lower()
+                    if option == "ex":
+                        ex = int(deserialized[i + 1])
+                    elif option == "px":
+                        px = int(deserialized[i + 1]) / 1000
+                    elif option == "exat":
+                        exat = int(deserialized[i + 1])
+                        ex = exat - int(time.time())
+                    elif option == "pxat":
+                        pxat = int(deserialized[i + 1])
+                        px = (pxat - int(time.time() * 1000)) / 1000
+            expiry = ex or px
+            if expiry is not None:
+                self.data_storage[key] = (value, time.time() + expiry)
+            else:
+                self.data_storage[key] = (value, None)
             return self.serialize_resp("OK")
         else:
             return self.serialize_resp("Invalid command")
